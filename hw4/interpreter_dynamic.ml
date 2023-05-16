@@ -54,16 +54,78 @@ let rec eval : exp -> env -> mem -> value * mem
   match exp with
   | CONST n -> (Int n, mem)
   | VAR x -> (apply_env env x, mem)
-  | ADD (e1, e2) -> let (n1, m1) = eval e1 env mem in let (n2, m2) = eval e2 env m1 in (((fun (Int n1) (Int n2) -> Int (n1 + n2)) n1 n2), m2)
-  | SUB (e1, e2) -> let (n1, m1) = eval e1 in let (n2, m2) = eval e2 in (n1 - n2 , m2)
-  | MUL (e1, e2) -> let (n1, m1) = eval e1 in let (n2, m2) = eval e2 in (n1 * n2 , m2)
-  | DIV (e1, e2) -> let (n1, m1) = eval e1 in let (n2, m2) = eval e2 in if n2 = 0 then raise UndefinedSemantics else (n1 / n2, m2)
-  | EQ (e1, e2) -> let (n1, m1) = eval e1 in let (n2, m2) = eval e2 in if n1 = n2 then (true, m2) else (false, m2)
-  | LT (e1, e2) -> let (n1, m1) = eval e1 in let (n2, m2) = eval e2 in if n1 < n2 then (true, m2) else (false, m2)
-  | ISZERO e -> let (n, m1) = eval e in if n = 0 then (true, m1) else (false, m1)
-  | READ -> read_int
-  | IF (e1, e2, e3) -> let (n1, m1) = eval e1 in let (n2, m2) = eval e2 in let (n3, m3) = eval e3 in if n1 then (n2, m2) else (n3, m3)
-  | _ -> raise NotImplemented
+  | ADD (e1, e2) -> let (n1, m1) = eval e1 env mem in
+    let (n2, m2) = eval e2 env m1 in
+    (match n1, n2 with
+    | Int n1, Int n2 -> (Int (n1+n2), m2)
+    | _ -> raise (Failure "Type Error: non-numeric values"))
+  | SUB (e1, e2) -> let (n1, m1) = eval e1 env mem in
+    let (n2, m2) = eval e2 env m1 in
+    (match n1, n2 with
+    | Int n1, Int n2 -> (Int (n1-n2), m2)
+    | _ -> raise (Failure "Type Error: non-numeric values"))
+  | MUL (e1, e2) -> let (n1, m1) = eval e1 env mem in
+    let (n2, m2) = eval e2 env m1 in
+    (match n1, n2 with
+    | Int n1, Int n2 -> (Int (n1*n2), m2)
+    | _ -> raise (Failure "Type Error: non-numeric values"))
+  | DIV (e1, e2) -> let (n1, m1) = eval e1 env mem in
+    let (n2, m2) = eval e2 env m1 in
+    (match n1, n2 with
+    | Int n1, Int n2 -> if n2 = 0 then raise UndefinedSemantics else (Int (n1/n2), m2)
+    | _ -> raise (Failure "Type Error: non-numeric values"))
+  | EQ (e1, e2) -> let (n1, m1) = eval e1 env mem in
+    let (n2, m2) = eval e2 env m1 in
+    (match n1, n2 with
+    | Int n1, Int n2 -> if n1 = n2 then (Bool true, m2) else (Bool false, m2)
+    | _ -> raise (Failure "Type Error: non-numeric values"))
+  | LT (e1, e2) -> let (n1, m1) = eval e1 env mem in
+    let (n2, m2) = eval e2 env m1 in
+    (match n1, n2 with
+    | Int n1, Int n2 -> if n1 < n2 then (Bool true, m2) else (Bool false, m2)
+    | _ -> raise (Failure "Type Error: non-numeric values"))
+  | ISZERO e -> let (n, m1) = eval e env mem in
+    (match n with
+    | Int n -> if n = 0 then (Bool true, m1) else (Bool false, m1)
+    | _ -> raise UndefinedSemantics)
+  | READ -> (Int (read_int()), mem)
+  | IF (e1, e2, e3) -> let (n1, m1) = eval e1 env mem in
+    let (n2, m2) = eval e2 env m1 in
+    let (n3, m3) = eval e3 env m1 in
+    (match n1 with
+    | Bool true -> (n2, m2)
+    | Bool false -> (n3, m3)
+    | _ -> raise UndefinedSemantics)
+  | LET (x, e1, e2) -> let (v1, m1) = eval e1 env mem in
+    let row = extend_env (x, v1) env in
+    let (v, m2) = eval e2 row m1 in (v, m2)
+  | LETREC (f, x, e1, e2) -> let row = extend_env (f, Procedure (x,e1)) env in
+    let (v, m1) = eval e2 row mem in (v, m1)
+  | LETMREC (f, x, ef, g, y, eg, e3) -> let row = extend_env (f, Procedure (x,ef)) env in
+    let row = extend_env (g, Procedure (y,eg)) row in
+    let (v, m1) = eval e3 row mem in (v, m1)
+  | PROC (x, e) -> (Procedure (x,e), mem)
+  | CALL (e1, e2) -> let (a, m1) = eval e1 env mem in
+    (match a with
+    | Procedure (x,e) -> let (v, m2) = eval e2 env m1 in
+      let row = extend_env (x,v) env in
+      let (vprime, m3) = eval e row m2 in (vprime, m3)
+    | _ -> raise UndefinedSemantics)
+  | NEWREF e -> let (v, m1) = eval e env mem in
+    let l = !counter in
+    let mem = extend_mem (l,v) m1 in
+    let dummy = new_location() in (Loc l, mem)
+  | DEREF e -> let (l, m1) = eval e env mem in
+    (match l with
+    | Loc l -> let v = apply_mem m1 l in (v, m1)
+    | _ -> raise UndefinedSemantics)
+  | SETREF (e1, e2) -> let (l, m1) = eval e1 env mem in
+    (match l with
+    | Loc l -> let (v, m2) = eval e2 env m1 in (v, extend_mem (l,v) m2)
+    | _ -> raise UndefinedSemantics)
+  | SEQ (e1, e2) -> let (v1, m1) = eval e1 env mem in
+    let (v2, m2) = eval e2 env m1 in (v2, m2)
+  | BEGIN e -> let (v, m1) = eval e env mem in (v, m1)
 	
 (* driver code *)
 let run : program -> value
